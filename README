@@ -1,0 +1,25 @@
+Tower Wars
+
+An entry for MiniLD #8 <http://ludumdare.com/compo/category/minild/minild-8>
+
+The theme for this competiton is "Mash-Up"
+
+This is my first entry into any of the Ludum Dare competitions.  As I'm a
+newcomer here, I don't really know much about the games that have been entered
+before.  Therefore, instead of picking two specific games, I've decided to pick
+several previous themes and try to make a game that fits all of them.
+
+So, the themes I've chosen:
+
+  LD2:  Construction/Destruction
+  LD10: Chain Reaction
+  LD12: The Tower
+
+And, depending on how much you're willing to stretch the theme:
+
+  LD0:  Indirect Interaction
+
+The idea is to have two players competing with each other to build a tower to a
+specified height.  (Possibly one and an AI, but I think multiplayer will be
+easier to get right.)  There will be opportunities for each player to sabotage
+the other's tower-in-construction.
