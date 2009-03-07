@@ -21,7 +21,25 @@
 import pygame, sys, os, traceback
 from pygame.locals import *
 from select import select
+from optparse import OptionParser
 import random
+
+option_parser = OptionParser()
+
+# Logging Options
+
+option_parser.add_option('-q', '--quiet', action='store_const', const=2, dest='verbosity', default=3, help='Only output warnings and errors')
+option_parser.add_option('-v', '--verbose', action='store_const', const=4, dest='verbosity', help='Output debug information about game events')
+option_parser.add_option('--trace', action='store_const', const=5, dest='verbosity', help='Output all system events as well as game events (lots of output)')
+option_parser.add_option('-l', '--logfile', action='store', type='string', dest='logfile', default='-', help='Destination for log output')
+
+# Networking Options
+
+option_parser.add_option('-s', '--server', action='store_true', dest='server', default='False', help='Run as a server.')
+option_parser.add_option('-c', '--client', action='store', dest='ip', type='string', default='0.0.0.0', help='Run as a client, connecting to the server at IP.')
+option_parser.add_option('-p', '--port', action='store', dest='port', type='int', default='4242', help='Port number for TCP connections.')
+
+options, args = option_parser.parse_args()
 
 pygame.init()
 pygame.display.set_mode((512, 768), pygame.DOUBLEBUF)
@@ -52,6 +70,8 @@ class EventManager:
             self.cache[time + remote_frame_offset] = []
         self.cache[time + remote_frame_offset].append(event)
 
+event_manager = EventManager()
+
 class SelectSocket:
     def __init__(self, file):
         self.inbuf  = ''
@@ -59,7 +79,7 @@ class SelectSocket:
         self.open = True
         if isinstance(file, int):
             self.fd = file
-        if hasattr(file, 'fileno'):
+        elif hasattr(file, 'fileno'):
             self.fd = file.fileno()
         else:
             self.fd = os.open(file, os.O_WRONLY | os.O_APPEND)
@@ -75,9 +95,12 @@ class SelectSocket:
             self.send()
 
     def recv(self):
-        data = os.read(self.fd, 4096)
-        self.inbuf += data
-        if not data: self.open = False # EOF
+        try:
+            data = os.read(self.fd, 4096)
+            self.inbuf += data
+            if not data: self.open = False # EOF
+        except OSError:
+            self.open = False
 
     def rts(self):
         return len(self.outbuf)
@@ -87,8 +110,11 @@ class SelectSocket:
 
 class Log(SelectSocket):
     def __init__(self):
-        SelectSocket.__init__(self, sys.stdout)
-        self.verbosity = 5 # Trace execution
+        if options.logfile == '-':
+            SelectSocket.__init__(self, sys.stdout)
+        else:
+            SelectSocket.__init__(self, os.open(options.logfile, os.O_WRONLY | os.O_APPEND | os.O_CREAT))
+        self.verbosity = options.verbosity # Trace execution
         self.desc = {0: 'FATAL', 1: 'ERROR', 2: 'WARN', 3:'INFO', 4:'DEBUG', 5:'TRACE'}
         self.msg(3, 'Logging', 'Log opened')
 
@@ -120,9 +146,12 @@ class Playfield:
         y = random.randint(0,47)
         val = random.randint(0,255)
         self.occupancy[y][x] = val
+        log.msg(4, 'Playfield', 'Mutate', cell=(y,x), value=val)
 
     def clear(self, (x, y)):
-        self.occupancy[y/16][x/16] = 0
+        if self.occupancy[y/16][x/16]:
+            self.occupancy[y/16][x/16] = 0
+            log.msg(4, 'Playfield', 'Clear', cell=(y,x))
 
 playfield = Playfield()
 
@@ -135,9 +164,12 @@ def render_frame():
 # Game Logic, called for every frame, even dropped ones
 def process_updates():
     for ev in pygame.event.get():
-        log.msg(5, 'PygameEvent', ev)
-        if ev.type == MOUSEMOTION: playfield.clear(ev.pos)
+        log.msg(5, 'PygameEvent', pygame.event.event_name(ev.type), **ev.dict)
+        if ev.type == MOUSEMOTION:
+            event_manager.add_local_event((playfield.clear, ev.pos))
         if ev.type == KEYDOWN and ev.key == pygame.K_q: sys.exit(0)
+    for ev in event_manager.getevents():
+        ev[0](*ev[1:])
     playfield.mutate()
     
 # Event Loop
