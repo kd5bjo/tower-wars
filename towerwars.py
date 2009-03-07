@@ -22,6 +22,9 @@ import pygame, sys, os, traceback
 from pygame.locals import *
 from select import select
 
+import gc
+gc.disable()
+
 pygame.init()
 pygame.display.set_mode((512, 768))
 
@@ -66,7 +69,7 @@ class SelectSocket:
 class Log(SelectSocket):
     def __init__(self):
         SelectSocket.__init__(self, sys.stdout)
-        self.verbosity = 5 # Trace execution
+        self.verbosity = 4 # Trace execution
         self.desc = {0: 'FATAL', 1: 'ERROR', 2: 'WARN', 3:'INFO', 4:'DEBUG', 5:'TRACE'}
         self.msg(3, 'Logging', 'Log opened')
 
@@ -86,10 +89,10 @@ while True:
     wait_interval = next_frame_time - pygame.time.get_ticks()
     frameno += 1
     if wait_interval<0:
-        log.msg(0, 'EventLoop', 'Late Frame', interval=wait_interval)
-        log.flush()
-        print >>sys.stderr, 'FATAL: Late Frame\n'
-        sys.exit(1)
+        log.msg(2, 'EventLoop', 'Dropping Frame', interval=wait_interval)
+    else:
+        pygame.display.get_surface().fill((color, color, color))
+        pygame.display.update()
     log.msg(5, 'EventLoop', 'Waiting', interval=wait_interval)
     while wait_interval > 0:
         try:
@@ -111,5 +114,3 @@ while True:
     #Game Logic
     color += 1
     if color > 255: color = 0
-    pygame.display.get_surface().fill((color, color, color))
-    pygame.display.update()
