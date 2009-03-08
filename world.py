@@ -27,7 +27,7 @@ import random, socket
 import gc
 gc.disable()
 
-WIDTH = 32
+WIDTH = 64
 HEIGHT = 48
 
 role = 'Server'
@@ -62,6 +62,13 @@ class Playfield:
             pygame.display.get_surface().fill((c,c,c),    pygame.Rect(offset[0]+16*col, offset[1], 16, 16*h))
             if c <= 26:
                 pygame.display.get_surface().fill((26,26,26), pygame.Rect(offset[0]+16*col, offset[1],  1, 16*h))
+        if role == 'Server':
+            pygame.display.get_surface().fill((0,255,0), pygame.Rect(offset[0],         offset[1], 8*WIDTH, 5*16))
+            pygame.display.get_surface().fill((255,0,0), pygame.Rect(offset[0]+8*WIDTH, offset[1], 8*WIDTH, 5*16))
+        elif role == 'Client':
+            pygame.display.get_surface().fill((255,0,0), pygame.Rect(offset[0],         offset[1], 8*WIDTH, 5*16))
+            pygame.display.get_surface().fill((0,255,0), pygame.Rect(offset[0]+8*WIDTH, offset[1], 8*WIDTH, 5*16))
+        pygame.display.get_surface().fill((0,0,255), pygame.Rect(offset[0]+8*WIDTH - 2, offset[1], 3, 16*HEIGHT))
         for p in self.pieces:
             p.render(offset)
 
@@ -93,7 +100,7 @@ class Playfield:
 
 
 class Piece:
-    def __init__(self, size=10):
+    def __init__(self, x, size=10):
         self.last_physics = 0
         self.forces = {}
         self.cells = set([(0,0)])
@@ -102,7 +109,7 @@ class Piece:
             candidate_cells = set([(rx, ry+1), (rx, ry-1), (rx+1, ry), (rx-1,ry)]) - self.cells
             if len(candidate_cells) < 2: continue
             self.cells.add(random.choice(list(candidate_cells)))
-        self.x = WIDTH/2
+        self.x = x
         self.y = -min(y for x,y in self.cells)
 
         self.rotation = 0
@@ -147,6 +154,17 @@ class Piece:
                 surf.fill(white, pygame.Rect(16*(x+self.x)+gridx+15, 16*(y+self.y)+gridy,     1,  1))
             if (x-1,y+1) not in xformed_cells:
                 surf.fill(white, pygame.Rect(16*(x+self.x)+gridx,    16*(y+self.y)+gridy+15,  1,  1))
+
+    def render_guides(self, (gridx, gridy)):
+        surf = pygame.display.get_surface()
+        if self.rotation != 0:
+            xformed_cells = set(self.rotations[self.rotation](coord) for coord in self.cells)
+        else:
+            xformed_cells = self.cells
+        left = min(x for x,y in xformed_cells)
+        right = max(x for x,y in xformed_cells)
+        surf.fill((0,255,0), pygame.Rect(gridx+16*(left+self.x)    , gridy, 1, 16*HEIGHT))
+        surf.fill((0,255,0), pygame.Rect(gridx+16*(right+self.x)+15, gridy, 1, 16*HEIGHT))
 
     def move(self, offx):
         if self.dropFrame: return
@@ -239,7 +257,7 @@ moveStart = 0
 def H_EVENT_reset():
     global playfield, next_piece
     playfield = Playfield()
-    next_piece = {'Server': Piece(), 'Client': Piece()}
+    next_piece = {'Server': Piece(WIDTH/4), 'Client': Piece(3*WIDTH/4)}
     global moveDirection
     moveDirection = 0
 
@@ -249,7 +267,7 @@ def H_EVENT_randomize(x):
 def H_EVENT_drop(role, col, rot):
     global next_piece
     next_piece[role].drop(int(col), int(rot))
-    next_piece[role] = Piece()
+    next_piece[role] = Piece({'Server': WIDTH/4, 'Client': 3*WIDTH/4}[role])
 
 def tick():
     playfield.tick()
@@ -264,6 +282,7 @@ def tick():
 def render_frame():
     pygame.display.get_surface().fill((0,0,0))
     playfield.render((0,0))
+    next_piece[role].render_guides((0,0))
     next_piece[role].render((0,0))
     pygame.display.flip()
 

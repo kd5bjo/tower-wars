@@ -55,8 +55,6 @@ options, args = option_parser.parse_args()
 
 pygame.init()
 world.init(options)
-pygame.display.set_mode((512, 768), pygame.DOUBLEBUF)
-
 
 class SelectSocket:
     def __init__(self, file):
