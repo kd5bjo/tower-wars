@@ -24,6 +24,9 @@ from select import select
 from optparse import OptionParser
 import random, socket
 
+import gc
+gc.disable()
+
 WIDTH = 32
 HEIGHT = 48
 
@@ -47,14 +50,12 @@ def init(options):
 # Input events: H_PYGAME_%s(**kwargs)
 # Semantic events H_EVENT_%s(*args)
 
-def tick():
-    pass
-
 class Playfield:
     def __init__(self):
         self.pieces = set()
         self.column_heights = [HEIGHT]*WIDTH
         self.streaks = [(HEIGHT, 0)] * WIDTH
+        self.occupancy = [[None]*WIDTH for x in xrange(HEIGHT)]
 
     def render(self, offset):
         for col, (h, c) in enumerate(self.streaks):
@@ -70,9 +71,31 @@ class Playfield:
 
     def tick(self):
         self.streaks = [(h, max(c-10,0)) for h,c in self.streaks]
+        queued_pieces = set()
+        for y, row in enumerate(self.occupancy):
+            for x, val in enumerate(row):
+                if not val: continue
+                if val.last_physics == frameno: continue
+                if val in queued_pieces: continue
+                if [v for c, v in val.above() if v.last_physics < frameno]:
+                    queued_pieces.add(val)
+                    continue
+                if val.do_physics():
+                    val.destroy()
+                    return
+            for val in queued_pieces.copy():
+                if not [v for c, v in val.above() if v.last_physics < frameno]:
+                    queued_pieces.remove(val)
+                    print >>sys.stderr, 'Secondary'
+                    if val.do_physics():
+                        val.destroy()
+                        return
+
 
 class Piece:
     def __init__(self, size=10):
+        self.last_physics = 0
+        self.forces = {}
         self.cells = set([(0,0)])
         while len(self.cells) < size:
             rx, ry = random.choice(list(self.cells))
@@ -147,11 +170,69 @@ class Piece:
         self.opacity = 5
         self.y = min( playfield.column_heights[x] - max([y for x2,y in self.cells if x2+self.x==x]+[-1000])
                       for x in xrange(WIDTH)) - 1
+
         for x,y in self.cells:
             if y+self.y < playfield.column_heights[x+self.x]:
                 playfield.update_column_heights(x+self.x, y+self.y)
+            playfield.occupancy[y+self.y][x+self.x] = self
         playfield.pieces.add(self)
-        
+
+    def destroy(self):
+        playfield.pieces.remove(self)
+        for x,y in self.cells:
+            playfield.occupancy[y+self.y][x+self.x] = None
+            if y+self.y == playfield.column_heights[x+self.x]:
+                try:
+                    playfield.column_heights[x+self.x] = min(idx for idx, row in enumerate(playfield.occupancy)
+                                                                 if row[x+self.x])
+                except ValueError:
+                    playfield.column_heights[x+self.x] = HEIGHT
+                playfield.streaks[x+self.x] = (playfield.column_heights[x+self.x],0)
+
+    def above(self):
+        rtn = []
+        for x,y in self.cells:
+            x += self.x
+            y += self.y-1
+            val = playfield.occupancy[y][x]
+            if val and val != self:
+                rtn.append((x,val))
+        return rtn
+
+    def below(self):
+        rtn = []
+        for x,y in self.cells:
+            x += self.x
+            y += self.y+1
+            if y == HEIGHT:
+                val = True
+            else:
+                val = playfield.occupancy[y][x]
+            if val and val != self:
+                rtn.append((x,val))
+        return rtn
+
+    def do_physics(self):
+        forces = dict((c, v.forces.get(c,0)) for c, v in self.above())
+        cg = sum(x for x,y in self.cells)/10 + self.x
+        forces[cg] = forces.get(cg,0) + 100   # Each block is 10 ?N
+        force  = sum(forces.values())
+        below = [k for k,v in self.below()]
+
+        ecg = sum([c*f for c,f in forces.iteritems()]) / force
+        if ecg in below:
+            self.forces = {}
+            self.forces[ecg] = force
+        elif not len(below) or ecg > max(below) or ecg < min(below):
+            return True
+        else:
+            self.forces = {}
+            self.forces[max(k for k in below if k < ecg)] = force/2
+            self.forces[min(k for k in below if k > ecg)] = force/2
+
+        self.last_physics = frameno
+        return False
+
 moveDirection = 0
 moveStart = 0
 
@@ -177,6 +258,8 @@ def tick():
         next_piece[role].opacity = min(5,next_piece[role].opacity)
     if moveDirection:
         next_piece[role].move(moveDirection)
+    gc.collect()
+
 # Game Display
 def render_frame():
     pygame.display.get_surface().fill((0,0,0))
