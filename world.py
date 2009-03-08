@@ -24,75 +24,171 @@ from select import select
 from optparse import OptionParser
 import random, socket
 
+WIDTH = 32
+HEIGHT = 48
+
+role = 'Server'
+
 # extern FPS
 # extern frameno
+# extern log
+# extern event_manager
 
 def add_options(option_parser):
     pass
 
 def init(options):
-    pygame.display.set_mode((512, 768), pygame.DOUBLEBUF)
+    global role
+    pygame.display.set_mode((16*WIDTH, 16*HEIGHT), pygame.DOUBLEBUF)
+    if options.ip != '0.0.0.0': role = 'Client'
     H_EVENT_reset()
 
-# extern log
 
 # Input events: H_PYGAME_%s(**kwargs)
 # Semantic events H_EVENT_%s(*args)
 
 def tick():
-    playfield.mutate()
-
-# extern event_manager
+    pass
 
 class Playfield:
     def __init__(self):
-       self.occupancy = [[0]*32 for x in range(48)]
+        self.pieces = set()
+        self.column_heights = [HEIGHT]*WIDTH
+        self.streaks = [(HEIGHT, 0)] * WIDTH
 
-    def render(self, (offy, offx)):
-        for y, row in enumerate(self.occupancy):
-            for x, val in enumerate(row):
-                cell = pygame.Rect(16*x+offx, 16*y+offy, 16, 16)
-                pygame.display.get_surface().fill((val,val,val), cell)
+    def render(self, offset):
+        for col, (h, c) in enumerate(self.streaks):
+            pygame.display.get_surface().fill((c,c,c), pygame.Rect(offset[0]+16*col, offset[1], 16, 16*h))
+        for p in self.pieces:
+            p.render(offset)
 
-    def mutate(self):
-        for y, row in enumerate(self.occupancy):
-            for x, val in enumerate(row):
-                if val: row[x] = val - 1
+    def update_column_heights(self, col, row):
+        self.column_heights[col] = row
+        self.streaks[col] = (row, 255)
 
-        x = random.randint(0,31)
-        y = random.randint(0,47)
-        val = random.randint(0,255)
-        self.occupancy[y][x] = val
-        log.msg(4, 'Playfield', 'Mutate', cell=(y,x), value=val)
+    def tick(self):
+        self.streaks = [(h, max(c-10,0)) for h,c in self.streaks]
 
-    def clear(self, (x, y)):
-        if self.occupancy[y/16][x/16]:
-            self.occupancy[y/16][x/16] = 0
-            log.msg(4, 'Playfield', 'Clear', cell=(y,x))
+class Piece:
+    def __init__(self, size=10):
+        self.cells = set([(0,0)])
+        while len(self.cells) < size:
+            rx, ry = random.choice(list(self.cells))
+            candidate_cells = set([(rx, ry+1), (rx, ry-1), (rx+1, ry), (rx-1,ry)]) - self.cells
+            if len(candidate_cells) < 2: continue
+            self.cells.add(random.choice(list(candidate_cells)))
+        self.x = WIDTH/2
+        self.y = -min(y for x,y in self.cells)
+
+        self._color = (0,0,0)
+        while self._color == (0,0,0):
+            self._color = tuple(random.choice((0,127,255)) for x in range(3))
+
+        self.opacity = 0
+        self.dropFrame = None
+#        for x,y in self.cells:
+#            playfield.occupancy[y+self.y][x+self.x] = self
+
+    def render(self, (gridy, gridx)):
+        surf = pygame.display.get_surface()
+        white = (255,255,255,128)
+        for x,y in self.cells:
+            cell = pygame.Rect(16*(x+self.x)+gridx, 16*(y+self.y)+gridy, 16, 16)
+            surf.fill(tuple((c*self.opacity) / 5 for c in self._color), cell)
+            if (x+1,y) not in self.cells:
+                surf.fill(white, pygame.Rect(16*(x+self.x)+gridx+15, 16*(y+self.y)+gridy,     1, 16))
+            if (x-1,y) not in self.cells:
+                surf.fill(white, pygame.Rect(16*(x+self.x)+gridx,    16*(y+self.y)+gridy,     1, 16))
+            if (x,y-1) not in self.cells:
+                surf.fill(white, pygame.Rect(16*(x+self.x)+gridx,    16*(y+self.y)+gridy,    16,  1))
+            if (x,y+1) not in self.cells:
+                surf.fill(white, pygame.Rect(16*(x+self.x)+gridx,    16*(y+self.y)+gridy+15, 16,  1))
+            if (x+1,y+1) not in self.cells:
+                surf.fill(white, pygame.Rect(16*(x+self.x)+gridx+15, 16*(y+self.y)+gridy+15,  1,  1))
+            if (x-1,y-1) not in self.cells:
+                surf.fill(white, pygame.Rect(16*(x+self.x)+gridx,    16*(y+self.y)+gridy,     1,  1))
+            if (x+1,y-1) not in self.cells:
+                surf.fill(white, pygame.Rect(16*(x+self.x)+gridx+15, 16*(y+self.y)+gridy,     1,  1))
+            if (x-1,y+1) not in self.cells:
+                surf.fill(white, pygame.Rect(16*(x+self.x)+gridx,    16*(y+self.y)+gridy+15,  1,  1))
+
+    def move(self, offx):
+        if self.dropFrame: return
+        new_x = self.x+offx
+        new_x = max(new_x, -min(x for x,y in self.cells))
+        new_x = min(new_x, WIDTH-1-max(x for x,y in self.cells))
+        self.x = new_x
+
+    def drop(self, column):
+        self.x = column
+        self.opacity = 5
+        self.y = min( playfield.column_heights[x] - max([y for x2,y in self.cells if x2+self.x==x]+[-1000])
+                      for x in xrange(WIDTH)) - 1
+        for x,y in self.cells:
+            if y+self.y < playfield.column_heights[x+self.x]:
+                playfield.update_column_heights(x+self.x, y+self.y)
+        playfield.pieces.add(self)
+        
+moveDirection = 0
+moveStart = 0
 
 def H_EVENT_reset():
-    global playfield
+    global playfield, next_piece
     playfield = Playfield()
+    next_piece = {'Server': Piece(), 'Client': Piece()}
+    global moveDirection
+    moveDirection = 0
 
 def H_EVENT_randomize(x):
     random.seed(int(x))
 
+def H_EVENT_drop(role, col):
+    global next_piece
+    next_piece[role].drop(int(col))
+    next_piece[role] = Piece()
+
+def tick():
+    playfield.tick()
+    if next_piece[role].dropFrame:
+        next_piece[role].opacity += 1
+        next_piece[role].opacity = min(5,next_piece[role].opacity)
+    if moveDirection and (frameno-moveStart) % 3 == 0:
+        next_piece[role].move(moveDirection)
 # Game Display
 def render_frame():
     pygame.display.get_surface().fill((0,0,0))
     playfield.render((0,0))
+    next_piece[role].render((0,0))
     pygame.display.flip()
 
 # Input Handlers
-def H_PYGAME_MouseButtonDown(pos, **kwargs):
-    event_manager.add_event('clear', pos[0], pos[1])
+#def H_PYGAME_MouseButtonDown(pos, **kwargs):
+#    event_manager.add_event('clear', pos[0], pos[1])
 
 def H_PYGAME_KeyDown(key, **kwargs):
-    if key == pygame.K_q:
+    global moveDirection, moveStart
+    if key in (pygame.K_q, pygame.K_ESCAPE):
         event_manager.add_event('quit')
+    if key == pygame.K_r:
+        event_manager.add_event('reset')
+    elif key == pygame.K_LEFT:
+        moveStart = frameno
+        moveDirection -= 1
+    elif key == pygame.K_RIGHT:
+        moveStart = frameno
+        moveDirection += 1
+    elif key == pygame.K_DOWN:
+        next_piece[role].dropFrame = frameno+5
+        event_manager.add_event('drop', role, next_piece[role].x)
+#    elif key == pygame.K_UP:
+#        event_manager.add_event('move_cursor',  0, -1)
 
-def H_EVENT_clear(x, y):
-    playfield.clear((int(x), int(y)))
+def H_PYGAME_KeyUp(key, **kwargs):
+    global moveDirection
+    if key == pygame.K_RIGHT:
+        moveDirection -= 1
+    if key == pygame.K_LEFT:
+        moveDirection += 1
 
 def H_EVENT_quit():
     sys.exit(0)
