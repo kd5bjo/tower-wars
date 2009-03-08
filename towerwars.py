@@ -24,7 +24,15 @@ from select import select
 from optparse import OptionParser
 import random, socket
 
-random_seed = random.getrandbits(32)
+import world
+
+FPS = 30
+next_frame_time = 0
+frameno = 0
+fds = set()
+event_delay = 5 #frames
+world.FPS = FPS
+world.frameno = frameno
 
 option_parser = OptionParser()
 
@@ -41,16 +49,14 @@ option_parser.add_option('-s', '--server', action='store_true', dest='server', d
 option_parser.add_option('-c', '--client', action='store', dest='ip', type='string', default='0.0.0.0', help='Run as a client, connecting to the server at IP.')
 option_parser.add_option('-p', '--port', action='store', dest='port', type='int', default='4242', help='Port number for TCP connections.')
 
+world.add_options(option_parser)
+
 options, args = option_parser.parse_args()
 
 pygame.init()
+world.init(options)
 pygame.display.set_mode((512, 768), pygame.DOUBLEBUF)
 
-FPS = 30
-next_frame_time = 0
-frameno = 0
-fds = set()
-event_delay = 5 #frames
 
 class SelectSocket:
     def __init__(self, file):
@@ -105,6 +111,7 @@ class Log(SelectSocket):
         self.outbuf += '%8d %5s %17s: %s\t%s\n' % (frameno, self.desc.get(level, level), label, message, kwargs)
 
 log = Log()
+world.log = log
 
 fds.add(log)
 
@@ -184,7 +191,7 @@ class EventManager:
                                 log.msg(3, 'Clock', 'Synchronized', rtt=rtt, frame_offset=self.remote_frame_offset)
                                 self.socket.outbuf += '%d synchronize %d\n' % \
                                     (frameno, frameno-self.remote_frame_offset)
-                                self.add_event('randomize', random_seed)
+                                self.add_event('randomize', random.getrandbits(32))
                                 self.add_event('reset')
                     if args[0] == 'synchronize':
                         rtt = sum(self.rtts)/(2*len(self.rtts))
@@ -193,25 +200,38 @@ class EventManager:
                         log.msg(3, 'Clock', 'Synchronized', rtt=rtt, frame_offset=self.remote_frame_offset)
             if self.state == 'Connected':
                 self.socket.outbuf += '%d ping %d\n' % (frameno, self.remote_frame)
-        add_local_events(self)
+        for ev in pygame.event.get():
+            log.msg(5, 'PygameEvent', pygame.event.event_name(ev.type), **ev.dict)
+            func_name = 'H_PYGAME_%s' % pygame.event.event_name(ev.type)
+            if hasattr(world, func_name):
+                getattr(world, func_name)(**ev.dict)
     
         precedence = ['remote', 'local']
         if options.server: precedence = ['local', 'remote']
 
+        world.frameno = frameno
+
         for p in precedence:
             for ev in (e for e in self.cache.get(frameno, []) if e[0] == p):
-                if ev[1] in self.handlers:
-                    log.msg(4, 'Event', ev[1], args=ev[2:])
-                    self.handlers[ev[1]](*ev[2:])
-        self.handlers['tick']()
+                log.msg(4, 'Event', ev[1], args=ev[2:])
+                func_name = 'H_EVENT_%s' % ev[1]
+                if hasattr(world, func_name):
+                    getattr(world, func_name)(*ev[2:])
+                else:
+                    log.msg(2, 'Event', 'UndefinedHandler', func=func_name, args=ev[2:])
+        world.tick()
 
     def add_event(self, *event):
-        if (frameno + event_delay) not in self.cache:
-            self.cache[frameno + event_delay] = []
+        self.add_delayed_event(event_delay, *event)
+
+    def add_delayed_event(self, delay, *event):
+        delay = max(delay, event_delay)
+        if (frameno + delay) not in self.cache:
+            self.cache[frameno + delay] = []
         event = [str(e) for e in event]
-        self.cache[frameno + event_delay].append(['local']+event)
+        self.cache[frameno + delay].append(['local']+event)
         if self.state == 'Synchronized':
-            self.socket.outbuf += '%d %s\n' % (frameno + event_delay, ' '.join(event))
+            self.socket.outbuf += '%d %s\n' % (frameno + delay, ' '.join(event))
 
     def add_remote_event(self, event, time):
         time += self.remote_frame_offset
@@ -221,59 +241,7 @@ class EventManager:
         self.cache[time].append(['remote']+event)
 
 event_manager = EventManager()
-# Game State
-class Playfield:
-    def __init__(self):
-       self.occupancy = [[0]*32 for x in range(48)]
-
-    def render(self, (offy, offx)):
-        for y, row in enumerate(self.occupancy):
-            for x, val in enumerate(row):
-                cell = pygame.Rect(16*x+offx, 16*y+offy, 16, 16)
-                pygame.display.get_surface().fill((val,val,val), cell)
-
-    def mutate(self):
-        for y, row in enumerate(self.occupancy):
-            for x, val in enumerate(row):
-                if val: row[x] = val - 1
-
-        x = random.randint(0,31)
-        y = random.randint(0,47)
-        val = random.randint(0,255)
-        self.occupancy[y][x] = val
-        log.msg(4, 'Playfield', 'Mutate', cell=(y,x), value=val)
-
-    def clear(self, (x, y)):
-        if self.occupancy[y/16][x/16]:
-            self.occupancy[y/16][x/16] = 0
-            log.msg(4, 'Playfield', 'Clear', cell=(y,x))
-
-def resetGame():
-    global playfield
-    playfield = Playfield()
-
-resetGame()
-
-# Game Display
-def render_frame():
-    pygame.display.get_surface().fill((0,0,0))
-    playfield.render((0,0))
-    pygame.display.flip()
-
-# Local Controls
-def add_local_events(evmanager):
-    for ev in pygame.event.get():
-        log.msg(5, 'PygameEvent', pygame.event.event_name(ev.type), **ev.dict)
-        if ev.type == MOUSEBUTTONDOWN:
-            evmanager.add_event('clear', ev.pos[0], ev.pos[1])
-        if ev.type == KEYDOWN and ev.key == pygame.K_q:
-            evmanager.add_event('quit')
-    
-event_manager.handlers['randomize'] = lambda x: random.seed(int(x))
-event_manager.handlers['reset'] = resetGame
-event_manager.handlers['clear'] = lambda x,y: playfield.clear((int(x), int(y)))
-event_manager.handlers['tick'] = lambda: playfield.mutate()
-event_manager.handlers['quit'] = lambda: sys.exit(0)
+world.event_manager = event_manager
 
 # Event Loop
 next_frame_time = pygame.time.get_ticks()
@@ -285,7 +253,7 @@ try:
         if wait_interval<0:
             log.msg(2, 'EventLoop', 'Dropping Frame', interval=wait_interval)
         else:
-            try: render_frame()
+            try: world.render_frame()
             except Exception, e:
                 log.msg(1, 'RenderFrame', traceback.format_exception_only(type(e),e)[-1].strip())
                 traceback.print_exc()
