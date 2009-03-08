@@ -58,7 +58,9 @@ class Playfield:
 
     def render(self, offset):
         for col, (h, c) in enumerate(self.streaks):
-            pygame.display.get_surface().fill((c,c,c), pygame.Rect(offset[0]+16*col, offset[1], 16, 16*h))
+            pygame.display.get_surface().fill((c,c,c),    pygame.Rect(offset[0]+16*col, offset[1], 16, 16*h))
+            if c <= 26:
+                pygame.display.get_surface().fill((26,26,26), pygame.Rect(offset[0]+16*col, offset[1],  1, 16*h))
         for p in self.pieces:
             p.render(offset)
 
@@ -80,6 +82,13 @@ class Piece:
         self.x = WIDTH/2
         self.y = -min(y for x,y in self.cells)
 
+        self.rotation = 0
+
+        self.rotations = [(lambda (x,y): ( x, y)),
+                          (lambda (x,y): ( y,-x)),
+                          (lambda (x,y): (-x,-y)),
+                          (lambda (x,y): (-y, x))]
+
         self._color = (0,0,0)
         while self._color == (0,0,0):
             self._color = tuple(random.choice((0,127,255)) for x in range(3))
@@ -91,35 +100,49 @@ class Piece:
 
     def render(self, (gridy, gridx)):
         surf = pygame.display.get_surface()
-        white = (255,255,255,128)
-        for x,y in self.cells:
+        white = (255,255,255)
+        if self.rotation != 0:
+            xformed_cells = set(self.rotations[self.rotation](coord) for coord in self.cells)
+        else:
+            xformed_cells = self.cells
+        for x,y in xformed_cells:
             cell = pygame.Rect(16*(x+self.x)+gridx, 16*(y+self.y)+gridy, 16, 16)
             surf.fill(tuple((c*self.opacity) / 5 for c in self._color), cell)
-            if (x+1,y) not in self.cells:
+            if (x+1,y) not in xformed_cells:
                 surf.fill(white, pygame.Rect(16*(x+self.x)+gridx+15, 16*(y+self.y)+gridy,     1, 16))
-            if (x-1,y) not in self.cells:
+            if (x-1,y) not in xformed_cells:
                 surf.fill(white, pygame.Rect(16*(x+self.x)+gridx,    16*(y+self.y)+gridy,     1, 16))
-            if (x,y-1) not in self.cells:
+            if (x,y-1) not in xformed_cells:
                 surf.fill(white, pygame.Rect(16*(x+self.x)+gridx,    16*(y+self.y)+gridy,    16,  1))
-            if (x,y+1) not in self.cells:
+            if (x,y+1) not in xformed_cells:
                 surf.fill(white, pygame.Rect(16*(x+self.x)+gridx,    16*(y+self.y)+gridy+15, 16,  1))
-            if (x+1,y+1) not in self.cells:
+            if (x+1,y+1) not in xformed_cells:
                 surf.fill(white, pygame.Rect(16*(x+self.x)+gridx+15, 16*(y+self.y)+gridy+15,  1,  1))
-            if (x-1,y-1) not in self.cells:
+            if (x-1,y-1) not in xformed_cells:
                 surf.fill(white, pygame.Rect(16*(x+self.x)+gridx,    16*(y+self.y)+gridy,     1,  1))
-            if (x+1,y-1) not in self.cells:
+            if (x+1,y-1) not in xformed_cells:
                 surf.fill(white, pygame.Rect(16*(x+self.x)+gridx+15, 16*(y+self.y)+gridy,     1,  1))
-            if (x-1,y+1) not in self.cells:
+            if (x-1,y+1) not in xformed_cells:
                 surf.fill(white, pygame.Rect(16*(x+self.x)+gridx,    16*(y+self.y)+gridy+15,  1,  1))
 
     def move(self, offx):
         if self.dropFrame: return
         new_x = self.x+offx
-        new_x = max(new_x, -min(x for x,y in self.cells))
-        new_x = min(new_x, WIDTH-1-max(x for x,y in self.cells))
+        new_x = max(new_x, -min(       self.rotations[self.rotation](coord)[0] for coord in self.cells))
+        new_x = min(new_x, WIDTH-1-max(self.rotations[self.rotation](coord)[0] for coord in self.cells))
         self.x = new_x
 
-    def drop(self, column):
+    def rotate(self):
+        if self.dropFrame: return
+        self.rotation += 1
+        if self.rotation >= len(self.rotations): self.rotation=0
+        self.y = -min(self.rotations[self.rotation](coord)[1] for coord in self.cells)
+        self.x = max(self.x, -min(       self.rotations[self.rotation](coord)[0] for coord in self.cells))
+        self.x = min(self.x, WIDTH-1-max(self.rotations[self.rotation](coord)[0] for coord in self.cells))
+
+    def drop(self, column, rotation):
+        self.cells = set(self.rotations[rotation](c) for c in self.cells)
+        self.rotation = 0
         self.x = column
         self.opacity = 5
         self.y = min( playfield.column_heights[x] - max([y for x2,y in self.cells if x2+self.x==x]+[-1000])
@@ -142,9 +165,9 @@ def H_EVENT_reset():
 def H_EVENT_randomize(x):
     random.seed(int(x))
 
-def H_EVENT_drop(role, col):
+def H_EVENT_drop(role, col, rot):
     global next_piece
-    next_piece[role].drop(int(col))
+    next_piece[role].drop(int(col), int(rot))
     next_piece[role] = Piece()
 
 def tick():
@@ -152,7 +175,7 @@ def tick():
     if next_piece[role].dropFrame:
         next_piece[role].opacity += 1
         next_piece[role].opacity = min(5,next_piece[role].opacity)
-    if moveDirection and (frameno-moveStart) % 3 == 0:
+    if moveDirection:
         next_piece[role].move(moveDirection)
 # Game Display
 def render_frame():
@@ -179,9 +202,9 @@ def H_PYGAME_KeyDown(key, **kwargs):
         moveDirection += 1
     elif key == pygame.K_DOWN:
         next_piece[role].dropFrame = frameno+5
-        event_manager.add_event('drop', role, next_piece[role].x)
-#    elif key == pygame.K_UP:
-#        event_manager.add_event('move_cursor',  0, -1)
+        event_manager.add_event('drop', role, next_piece[role].x, next_piece[role].rotation)
+    elif key == pygame.K_UP:
+        next_piece[role].rotate()
 
 def H_PYGAME_KeyUp(key, **kwargs):
     global moveDirection

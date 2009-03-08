@@ -26,7 +26,7 @@ import random, socket
 
 import world
 
-FPS = 30
+FPS = 20
 next_frame_time = 0
 frameno = 0
 fds = set()
