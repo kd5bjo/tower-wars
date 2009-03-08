@@ -31,6 +31,16 @@ WIDTH = 64
 HEIGHT = 48
 
 role = 'Server'
+screen = 'Game'
+score = {'Server': 0, 'Client': 0}
+movecount = {'Server': 0, 'Client': 0}
+
+winmsg = ['Game Over', 'You have won.', "Press `r' to start a new game", "Press `q' or `Esc' to quit"]
+losemsg = ['Game Over', 'You have lost.', "Press `r' to start a new game", "Press `q' or `Esc' to quit"]
+
+lastWinner = None
+
+
 
 # extern FPS
 # extern frameno
@@ -41,8 +51,11 @@ def add_options(option_parser):
     pass
 
 def init(options):
-    global role
+    global role, winmsg, losemsg
     pygame.display.set_mode((16*WIDTH, 16*HEIGHT), pygame.DOUBLEBUF)
+    font = pygame.font.SysFont('couriernew', 48)
+    winmsg  = [font.render(t, True, (0,255,0), (0,0,0)).convert() for t in winmsg ]
+    losemsg = [font.render(t, True, (255,0,0), (0,0,0)).convert() for t in losemsg]
     if options.ip != '0.0.0.0': role = 'Client'
     H_EVENT_reset()
 
@@ -195,6 +208,13 @@ class Piece:
             playfield.occupancy[y+self.y][x+self.x] = self
         playfield.pieces.add(self)
 
+        for x,y in self.cells:
+            if y+self.y <= 5 and self.x < WIDTH/2:
+                return 'Server'
+            elif y+self.y <= 5:
+                return 'Client'
+            else: return ''
+
     def destroy(self):
         playfield.pieces.remove(self)
         for x,y in self.cells:
@@ -255,9 +275,11 @@ moveDirection = 0
 moveStart = 0
 
 def H_EVENT_reset():
-    global playfield, next_piece
+    global playfield, next_piece, movecount, screen
     playfield = Playfield()
     next_piece = {'Server': Piece(WIDTH/4), 'Client': Piece(3*WIDTH/4)}
+    movecount = {'Server': 0, 'Client': 0}
+    screen = 'Game'
     global moveDirection
     moveDirection = 0
 
@@ -265,25 +287,47 @@ def H_EVENT_randomize(x):
     random.seed(int(x))
 
 def H_EVENT_drop(role, col, rot):
-    global next_piece
-    next_piece[role].drop(int(col), int(rot))
+    global next_piece, screen, last_winner
+    winner = next_piece[role].drop(int(col), int(rot))
     next_piece[role] = Piece({'Server': WIDTH/4, 'Client': 3*WIDTH/4}[role])
+    movecount[role] += 1
+
+    if winner:
+        score[winner] += 1
+        log.msg(3, 'Game', 'Winner', role=winner)
+        log.msg(3, 'Game', 'MoveCount', **movecount)
+        log.msg(3, 'Game', 'Score', **score)
+        screen = 'GameOver'
+        last_winner = winner
 
 def tick():
-    playfield.tick()
-    if next_piece[role].dropFrame:
-        next_piece[role].opacity += 1
-        next_piece[role].opacity = min(5,next_piece[role].opacity)
-    if moveDirection:
-        next_piece[role].move(moveDirection)
+    if screen == 'Game':
+        playfield.tick()
+        if next_piece[role].dropFrame:
+            next_piece[role].opacity += 1
+            next_piece[role].opacity = min(5,next_piece[role].opacity)
+        if moveDirection:
+            next_piece[role].move(moveDirection)
     gc.collect()
 
 # Game Display
 def render_frame():
     pygame.display.get_surface().fill((0,0,0))
     playfield.render((0,0))
-    next_piece[role].render_guides((0,0))
-    next_piece[role].render((0,0))
+    if screen == 'Game':
+        next_piece[role].render_guides((0,0))
+        next_piece[role].render((0,0))
+    elif screen == 'GameOver':
+        if last_winner == role:
+            msg = winmsg
+        else:
+            msg = losemsg
+        vdist = 768/(len(msg)+2)
+        x = 512
+        y = vdist
+        for surf in msg:
+            pygame.display.get_surface().blit(surf, (x-surf.get_width()/2, y-surf.get_height()/2))
+            y += vdist
     pygame.display.flip()
 
 # Input Handlers
@@ -296,24 +340,26 @@ def H_PYGAME_KeyDown(key, **kwargs):
         event_manager.add_event('quit')
     if key == pygame.K_r:
         event_manager.add_event('reset')
-    elif key == pygame.K_LEFT:
-        moveStart = frameno
-        moveDirection = -1
-    elif key == pygame.K_RIGHT:
-        moveStart = frameno
-        moveDirection =  1
-    elif key == pygame.K_DOWN:
-        next_piece[role].dropFrame = frameno+5
-        event_manager.add_event('drop', role, next_piece[role].x, next_piece[role].rotation)
-    elif key == pygame.K_UP:
-        next_piece[role].rotate()
-
+    if screen == 'Game':
+        if key == pygame.K_LEFT:
+            moveStart = frameno
+            moveDirection = -1
+        elif key == pygame.K_RIGHT:
+            moveStart = frameno
+            moveDirection =  1
+        elif key == pygame.K_DOWN:
+            next_piece[role].dropFrame = frameno+5
+            event_manager.add_event('drop', role, next_piece[role].x, next_piece[role].rotation)
+        elif key == pygame.K_UP:
+            next_piece[role].rotate()
+    
 def H_PYGAME_KeyUp(key, **kwargs):
     global moveDirection
-    if key == pygame.K_RIGHT:
-        moveDirection = 0
-    if key == pygame.K_LEFT:
-        moveDirection = 0
+    if screen == 'Game':
+        if key == pygame.K_RIGHT:
+            moveDirection = 0
+        if key == pygame.K_LEFT:
+            moveDirection = 0
 
 def H_EVENT_quit():
     sys.exit(0)
