@@ -298,10 +298,10 @@ def H_PYGAME_KeyDown(key, **kwargs):
         event_manager.add_event('reset')
     elif key == pygame.K_LEFT:
         moveStart = frameno
-        moveDirection -= 1
+        moveDirection = -1
     elif key == pygame.K_RIGHT:
         moveStart = frameno
-        moveDirection += 1
+        moveDirection =  1
     elif key == pygame.K_DOWN:
         next_piece[role].dropFrame = frameno+5
         event_manager.add_event('drop', role, next_piece[role].x, next_piece[role].rotation)
@@ -311,9 +311,9 @@ def H_PYGAME_KeyDown(key, **kwargs):
 def H_PYGAME_KeyUp(key, **kwargs):
     global moveDirection
     if key == pygame.K_RIGHT:
-        moveDirection -= 1
+        moveDirection = 0
     if key == pygame.K_LEFT:
-        moveDirection += 1
+        moveDirection = 0
 
 def H_EVENT_quit():
     sys.exit(0)
